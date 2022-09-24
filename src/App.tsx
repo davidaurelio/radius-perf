@@ -23,7 +23,7 @@ export default function App() {
   const [benchmarkInfo, setBenchmarkInfo] = useState(null);
 
   const showRadius = (vector: Vector, unit: Unit) => {
-    if (radius && radius.vector.equals(vector) && radius.type === "moveable") {
+    if (radius && radius.vector === vector && radius.type === "moveable") {
       setRadius({
         vector,
         type: "attack",

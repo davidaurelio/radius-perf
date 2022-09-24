@@ -1,6 +1,6 @@
 import { Unit } from "./Entity";
 import { UnitInfo } from "./Info";
-import MapData, { Vector, vec } from "./MapData";
+import MapData, { Vector, Vec, VEC_BITS, VEC_MASK } from "./MapData.js";
 
 /*
  * This file calculates the movement radius for a unit on a 2d map. This is a hot-path
@@ -30,16 +30,47 @@ import MapData, { Vector, vec } from "./MapData";
  *       structure as long as it still contains the vector, cost and parent vector.
  */
 
-export class RadiusItem {
-  readonly parent: Vector | null;
+// high bit unused -- 10 bits cost -- 1 bit has parent -- 12 bits parent -- 12 bits vector
+declare const RADIUS_ITEM_PRIVATE: unique symbol;
+export type RadiusItem = number & { [RADIUS_ITEM_PRIVATE]: number };
 
-  constructor(
-    public readonly vector: Vector,
-    public readonly cost = 0,
-    parent?: Vector | null
-  ) {
-    this.parent = parent && !vector.equals(parent) ? parent : null;
-  }
+const PARENT_SHIFT = VEC_BITS;
+const HAS_PARENT_SHIFT = PARENT_SHIFT << 1;
+const HAS_PARENT_MASK = 1 << PARENT_SHIFT;
+const COST_SHIFT = HAS_PARENT_SHIFT + 1;
+const COST_MASK = (-1 << COST_SHIFT) >>> 0;
+
+function radiusItem(
+  vector: Vector,
+  cost = 0,
+  parent?: Vector | null
+): RadiusItem {
+  return ((cost << COST_SHIFT) |
+    (+(parent != null) << HAS_PARENT_SHIFT) |
+    (((parent ?? 0) & VEC_MASK) << PARENT_SHIFT) |
+    (vector & VEC_MASK)) as RadiusItem;
+}
+
+function radiusItemVector(item: RadiusItem): Vector {
+  return (item & VEC_MASK) as Vector;
+}
+
+type RadiusItemParts = { cost: number; parent: null | Vector; vector: Vector };
+function radiusItemParts(
+  item: RadiusItem,
+  into: RadiusItemParts
+): RadiusItemParts {
+  into.cost = item >>> COST_SHIFT;
+  into.parent =
+    item & HAS_PARENT_MASK
+      ? (((item >>> PARENT_SHIFT) & VEC_MASK) as Vector)
+      : null;
+  into.vector = (item & VEC_MASK) as Vector;
+  return into;
+}
+
+function radiusItemCostLT(a: RadiusItem, b: RadiusItem): boolean {
+  return (a & COST_MASK) < (b & COST_MASK);
 }
 
 export function isAccessibleBase(
@@ -59,18 +90,32 @@ export function isAccessibleBase(
 const getCost = (map: MapData, info: UnitInfo, vector: Vector) =>
   map.getTileInfo(vector).getCost(info);
 
+type Vec4 = [Vector, Vector, Vector, Vector];
+const PARENT_CANDIDATES: Vec4 = [
+  Vec.INVALID,
+  Vec.INVALID,
+  Vec.INVALID,
+  Vec.INVALID,
+];
 const getParent = (vector: Vector, paths: ReadonlyMap<Vector, RadiusItem>) => {
   let parent = null;
-  const vectors = [vector.up(), vector.right(), vector.down(), vector.left()];
-  for (let i = 0; i < vectors.length; i++) {
+  const vectors = PARENT_CANDIDATES;
+  Vec.expand(vector, vectors);
+  for (let i = 0; i < 4; i++) {
     const item = paths.get(vectors[i]);
-    if (!parent || (item && item.cost < parent.cost)) {
+    if (parent == null || (item != null && radiusItemCostLT(item, parent))) {
       parent = item;
     }
   }
   return parent!;
 };
 
+const RADIUS_VECS: Vec4 = [Vec.INVALID, Vec.INVALID, Vec.INVALID, Vec.INVALID];
+const RADIUS_ITEM_PARTS: RadiusItemParts = {
+  cost: 0,
+  parent: null,
+  vector: Vec.INVALID,
+};
 function calculateRadius(
   map: MapData,
   unit: Unit,
@@ -85,16 +130,16 @@ function calculateRadius(
   ) => boolean
 ): ReadonlyMap<Vector, RadiusItem> {
   const info = unit.info;
-  const paths = new Map<Vector, RadiusItem>([
-    [start, new RadiusItem(start, 0)]
-  ]);
+  const paths = new Map<Vector, RadiusItem>([[start, radiusItem(start, 0)]]);
   const closed = new Set();
-  for (const [, { vector }] of paths) {
+  for (const item of paths.values()) {
+    const vector = radiusItemVector(item);
     if (closed.has(vector)) {
       continue;
     }
-    const vectors = [vector.left(), vector.up(), vector.right(), vector.down()];
-    for (let i = 0; i < vectors.length; i++) {
+    const vectors = RADIUS_VECS;
+    Vec.expand(vector, RADIUS_VECS);
+    for (let i = 0; i < 4; i++) {
       const currentVector = vectors[i];
       if (
         paths.has(currentVector) ||
@@ -109,11 +154,13 @@ function calculateRadius(
         continue;
       }
       const parent = getParent(currentVector, paths);
-      const totalCost = parent?.cost + cost;
+      if (!parent) continue;
+      radiusItemParts(parent, RADIUS_ITEM_PARTS);
+      const totalCost = RADIUS_ITEM_PARTS.cost + cost;
       if (totalCost <= radius && totalCost <= unit.fuel) {
         paths.set(
           currentVector,
-          new RadiusItem(currentVector, totalCost, parent.vector)
+          radiusItem(currentVector, totalCost, RADIUS_ITEM_PARTS.vector)
         );
       }
     }
@@ -137,6 +184,17 @@ export function moveable(
   return calculateRadius(map, unit, start, radius, getCost, isAccessible);
 }
 
+const ATTACKABLE_VECS: Vec4 = [
+  Vec.INVALID,
+  Vec.INVALID,
+  Vec.INVALID,
+  Vec.INVALID,
+];
+const ATTACKABLE_RADIUS_ITEM_PARTS: RadiusItemParts = {
+  cost: 0,
+  parent: null,
+  vector: Vec.INVALID,
+};
 export function attackable(
   map: MapData,
   unit: Unit,
@@ -153,70 +211,63 @@ export function attackable(
     const [low, high] = range;
     for (let x = 0; x <= high; x++) {
       for (let y = 0; y <= high - x; y++) {
-        const v1 = vec(vector.x + x, vector.y + y);
-        if (vector.distance(v1) >= low) {
-          const v2 = vec(vector.x + x, vector.y - y);
-          const v3 = vec(vector.x - x, vector.y + y);
-          const v4 = vec(vector.x - x, vector.y - y);
+        const v1 = Vec.add(vector, x, y);
+        if (Vec.distance(vector, v1) >= low) {
+          const v2 = Vec.add(vector, x, -y);
+          const v3 = Vec.add(vector, -x, y);
+          const v4 = Vec.add(vector, -x, -y);
           if (map.contains(v1)) {
-            attackable.set(v1, new RadiusItem(v1));
+            attackable.set(v1, radiusItem(v1));
           }
           if (map.contains(v2)) {
-            attackable.set(v2, new RadiusItem(v2));
+            attackable.set(v2, radiusItem(v2));
           }
           if (map.contains(v3)) {
-            attackable.set(v3, new RadiusItem(v3));
+            attackable.set(v3, radiusItem(v3));
           }
           if (map.contains(v4)) {
-            attackable.set(v4, new RadiusItem(v4));
+            attackable.set(v4, radiusItem(v4));
           }
         }
       }
     }
   } else {
-    vector
-      .expand()
-      .slice(1)
-      .forEach((currentVector) => {
-        if (map.contains(currentVector)) {
-          attackable.set(
-            currentVector,
-            new RadiusItem(currentVector, 0, vector)
-          );
-        }
-      });
+    Vec.expand(vector, ATTACKABLE_VECS);
+    for (let i = 1; i < 4; ++i) {
+      const currentVector = ATTACKABLE_VECS[i];
+      if (map.contains(currentVector)) {
+        attackable.set(currentVector, radiusItem(currentVector, 0, vector));
+      }
+    }
 
     if (unit.canMove()) {
-      calculateRadius(
+      for (const parent of calculateRadius(
         map,
         unit,
         vector,
         unit.info.radius,
         getCost,
         isAccessibleBase
-      ).forEach((parent) => {
-        const unitB = map.units.get(parent.vector);
+      ).values()) {
+        const parts = radiusItemParts(parent, ATTACKABLE_RADIUS_ITEM_PARTS);
+        const unitB = map.units.get(parts.vector);
         if (!unitB || map.isEnemy(unitB, unit)) {
-          const vectors = [
-            parent.vector.left(),
-            parent.vector.up(),
-            parent.vector.right(),
-            parent.vector.down()
-          ];
-          for (let i = 0; i < vectors.length; i++) {
+          const vectors = ATTACKABLE_VECS;
+          Vec.expand(parts.vector, vectors);
+          for (let i = 0; i < 4; i++) {
             const vector = vectors[i];
             if (map.contains(vector)) {
               const itemB = attackable.get(vector);
-              if (!itemB || parent.cost < itemB.cost) {
+              if (!itemB || radiusItemCostLT(parent, itemB)) {
                 attackable.set(
                   vector,
-                  new RadiusItem(vector, parent.cost, parent.vector)
+                  radiusItem(vector, parts.cost, parts.vector)
                 );
               }
             }
           }
         }
-      });
+      }
     }
   }
 

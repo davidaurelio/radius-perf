@@ -59,67 +59,90 @@ export function toPlayerID(id: number): PlayerID {
   }
 }
 
-export abstract class Vector {
-  constructor(public readonly x: number, public readonly y: number) {}
+const SHIFT = 6;
+const LOW_MASK = (1 << SHIFT) - 1;
+const HIGH_MASK = LOW_MASK << SHIFT;
+export const VEC_MASK = HIGH_MASK | LOW_MASK;
+export const VEC_BITS = SHIFT << 1;
 
-  up(n = 1): Vector {
-    return vec(this.x, this.y - n);
-  }
-  right(n = 1): Vector {
-    return vec(this.x + n, this.y);
-  }
-  down(n = 1): Vector {
-    return vec(this.x, this.y + n);
-  }
-  left(n = 1): Vector {
-    return vec(this.x - n, this.y);
-  }
+declare const PRIVATE_VECTOR: unique symbol;
+export type Vector = number & { [PRIVATE_VECTOR]: number };
 
-  // Do not change the order of this expansion.
-  expand(): ReadonlyArray<Vector> {
-    return [this, this.up(), this.right(), this.down(), this.left()];
-  }
+declare const PRIVATE_SIZE: unique symbol;
+type Size = number & { [PRIVATE_SIZE]: number };
 
-  distance(v: Vector): number {
-    return Math.abs(this.x - v.x) + Math.abs(this.y - v.y);
+export abstract class Vec {
+  /**
+   * Supports coordinates in the inclusive range 0--63.
+   */
+  static of(x: number, y: number): Vector {
+    return ((x & LOW_MASK) | (y << SHIFT)) as Vector;
   }
 
-  equals(vector: Vector | null): boolean {
-    return !!vector && this.x == vector.x && this.y == vector.y;
+  static readonly INVALID = (-1 >>> 0) as Vector;
+
+  static add(vec: Vector, addX: number, addY: number): Vector {
+    const x = vec & LOW_MASK;
+    const y = vec & HIGH_MASK;
+    return (((x + addX) & LOW_MASK) | (y + (addY << SHIFT))) as Vector;
   }
 
-  valueOf(): string {
-    return this.toString();
+  static up(vec: Vector, n = 1): Vector {
+    return (vec - (n << SHIFT)) as Vector;
   }
 
-  toString(): string {
-    return `${this.x},${this.y}`;
+  static right(vec: Vector, n = 1): Vector {
+    return (vec + (n & LOW_MASK)) as Vector;
   }
 
-  toJSON(): [number, number] {
-    return [this.x, this.y];
+  static down(vec: Vector, n = 1): Vector {
+    return (vec + (n << SHIFT)) as Vector;
+  }
+
+  static left(vec: Vector, n = 1): Vector {
+    return (vec - (n & LOW_MASK)) as Vector;
+  }
+
+  static expand(
+    vec: Vector,
+    into: [Vector, Vector, Vector, Vector]
+  ): [Vector, Vector, Vector, Vector] {
+    // Do not change the order of this expansion.
+    into[0] = this.up(vec);
+    into[1] = this.right(vec);
+    into[2] = this.down(vec);
+    into[3] = this.left(vec);
+    return into;
+  }
+
+  static distance(a: Vector, b: Vector): number {
+    const ax = a & LOW_MASK,
+      ay = a >>> SHIFT,
+      bx = b & LOW_MASK,
+      by = b >>> SHIFT;
+    return Math.abs(ax - bx) + Math.abs(ay - by);
   }
 }
-
-const szudzik = (x: number, y: number) => (x >= y ? x * x + x + y : y * y + x);
-const signed = (x: number, y: number) =>
-  szudzik(x >= 0 ? 2 * x : -2 * x - 1, y >= 0 ? 2 * y : -2 * y - 1) * 0.5;
-
-const vectors = Array(4000);
 
 // This wrapper ensures that `Vector` instances can be used as keys in a
 // regular JavaScript `Map`.
-export function vec(x: number, y: number): Vector {
-  const id = signed(x, y);
-  // @ts-ignore
-  return vectors[id] || (vectors[id] = new Vector(x, y));
-}
+export const vec = Vec.of;
 
-class SizeVector {
+export class SizeVector {
   constructor(public readonly width: number, public readonly height: number) {}
+  contains(vec: Vector): boolean {
+    return this.width >= (vec & LOW_MASK) && this.height >= vec >>> SHIFT;
+  }
 
-  contains({ x, y }: Vector): boolean {
-    return x > 0 && y > 0 && this.width >= x && this.height >= y;
+  static of(width: number, height: number): Size {
+    return Vec.of(width, height) as unknown as Size;
+  }
+
+  static contains(size: Size, coord: Vector): boolean {
+    return (
+      (coord & HIGH_MASK) <= (size & HIGH_MASK) &&
+      (coord & LOW_MASK) <= (size & LOW_MASK)
+    );
   }
 }
 
@@ -164,7 +187,7 @@ export default class MapData {
   }
 
   getTileIndex(vector: Vector): number {
-    return (vector.y - 1) * this.size.width + vector.x - 1;
+    return ((vector >>> SHIFT) - 1) * this.size.width + (vector & LOW_MASK) - 1;
   }
 
   getTile(vector: Vector): number | null {
