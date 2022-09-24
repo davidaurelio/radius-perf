@@ -1,6 +1,6 @@
 import { Unit } from "./Entity";
 import { UnitInfo } from "./Info";
-import MapData, { Vector, Vec, VEC_BITS, VEC_MASK } from "./MapData.js";
+import MapData, { Vector, Vec, VEC_BITS, VEC_MASK } from "./MapData";
 
 /*
  * This file calculates the movement radius for a unit on a 2d map. This is a hot-path
