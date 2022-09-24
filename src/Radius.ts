@@ -31,7 +31,7 @@ import MapData, { Vector, Vec, VEC_BITS, VEC_MASK } from "./MapData";
  */
 
 // high bit unused -- 10 bits cost -- 1 bit has parent -- 12 bits parent -- 12 bits vector
-declare const RADIUS_ITEM_PRIVATE: unique symbol;
+const RADIUS_ITEM_PRIVATE: unique symbol = Symbol();
 export type RadiusItem = number & { [RADIUS_ITEM_PRIVATE]: number };
 
 const PARENT_SHIFT = VEC_BITS;

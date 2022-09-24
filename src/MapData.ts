@@ -65,10 +65,10 @@ const HIGH_MASK = LOW_MASK << SHIFT;
 export const VEC_MASK = HIGH_MASK | LOW_MASK;
 export const VEC_BITS = SHIFT << 1;
 
-declare const PRIVATE_VECTOR: unique symbol;
+const PRIVATE_VECTOR: unique symbol = Symbol();
 export type Vector = number & { [PRIVATE_VECTOR]: number };
 
-declare const PRIVATE_SIZE: unique symbol;
+const PRIVATE_SIZE: unique symbol = Symbol();
 type Size = number & { [PRIVATE_SIZE]: number };
 
 export abstract class Vec {
